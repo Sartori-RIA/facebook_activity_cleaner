@@ -1,0 +1,59 @@
+timezone: America/Sao_Paulo
+locale: pt-BR
+
+delays:
+  min_ms: 2000
+  max_ms: 5000
+
+limits:
+  max_deletes_per_run: 25
+  max_consecutive_failures: 3
+  scroll_stagnation_limit: 3
+  max_scrolls_per_scan: 500
+
+protection:
+  people:
+    - name: Natanaiah
+      relationship: spouse
+      profile_url: null
+      protect:
+        - posts_authored_by
+        - posts_tagging
+        - posts_mentioning
+        - photos_with
+        - shared_posts_from
+        - comments_on_posts_by
+  family_memories:
+    enabled: true
+    protect_tagged_family_members: true
+    protect_photo_albums: true
+    protect_relationship_milestones: true
+    protect_family_events: true
+    keywords:
+      - família
+      - family
+      - esposa
+      - wife
+      - filhos
+      - children
+      - casamento
+      - wedding
+      - aniversário
+      - birthday
+      - Natal
+      - Christmas
+  rules:
+    - id: protect-family-keywords
+      type: keyword
+      action: protect
+      values:
+        - família
+        - casamento
+        - meus filhos
+    - id: protect-family-photos
+      type: media_classification
+      action: review
+      value: potential_family_memory
+
+logging:
+  level: warn

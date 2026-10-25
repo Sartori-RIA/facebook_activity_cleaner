@@ -1,0 +1,15 @@
+node_modules/
+dist/
+web/dist/
+coverage/
+playwright-report/
+test-results/
+.fb-cleaner/
+browser-profile/
+logs/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+.DS_Store
+.idea/
