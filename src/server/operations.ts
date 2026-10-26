@@ -84,38 +84,44 @@ function dateInput(request: DateRequest): DateFilterInput {
   return readDateFilter(flags);
 }
 
-export function listActivityCards(ctx: AppContext): ActivityCard[] {
+export function listActivityCards(ctx: AppContext, year?: number): ActivityCard[] {
   const filter = compileDateFilter({ all: true }, ctx.config.timezone);
   const policy = policyFor(ctx);
-  return ctx.activities.list().map((activity) => {
-    const decision = loadDecision(
-      { activities: ctx.activities, protection: ctx.protection },
-      activity,
-      filter,
-      policy,
-    );
-    const saved = rememberDecision(
-      { activities: ctx.activities, protection: ctx.protection },
-      activity,
-      decision,
-      { updateStatus: true },
-    );
-    return {
-      id: saved.id,
-      type: saved.activityType,
-      status: saved.status,
-      date: saved.occurredText,
-      ownership: saved.ownership,
-      text: saved.textPreview,
-      label: saved.rawLabel,
-      sharedFrom: saved.metadata.sharedFromName,
-      author: saved.authorName,
-      url: publicFacebookUrl(saved.sourceUrl),
-      group: previewGroup(decision),
-      outcome: decision.outcome,
-      reasons: decision.reasons.map((reason) => reasonPayload(reason.code, reason.detail)),
-    };
-  });
+  const activities = year === undefined ? ctx.activities.list() : ctx.activities.listByYear(year);
+  return activities
+    .map((activity) => {
+      const decision = loadDecision(
+        { activities: ctx.activities, protection: ctx.protection },
+        activity,
+        filter,
+        policy,
+      );
+      const saved = rememberDecision(
+        { activities: ctx.activities, protection: ctx.protection },
+        activity,
+        decision,
+        { updateStatus: true },
+      );
+      if (saved.status === 'deleted' || saved.status === 'deleting') {
+        return null;
+      }
+      return {
+        id: saved.id,
+        type: saved.activityType,
+        status: saved.status,
+        date: saved.occurredText,
+        ownership: saved.ownership,
+        text: saved.textPreview,
+        label: saved.rawLabel,
+        sharedFrom: saved.metadata.sharedFromName,
+        author: saved.authorName,
+        url: publicFacebookUrl(saved.sourceUrl),
+        group: saved.status === 'requires_review' ? 'needs_review' : previewGroup(decision),
+        outcome: decision.outcome,
+        reasons: decision.reasons.map((reason) => reasonPayload(reason.code, reason.detail)),
+      };
+    })
+    .filter((card): card is ActivityCard => card !== null);
 }
 
 export function overview(ctx: AppContext) {
@@ -125,6 +131,7 @@ export function overview(ctx: AppContext) {
     timezone: ctx.config.timezone,
     databasePath: ctx.paths.databasePath,
     counts: ctx.activities.countByStatus() satisfies Record<ActivityStatus, number>,
+    years: ctx.activities.countByYear(),
     people: ctx.protection.listPeople().map((person) => ({
       id: person.id,
       name: person.name,

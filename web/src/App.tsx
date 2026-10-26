@@ -7,6 +7,7 @@ import { ProtectScreen } from './ProtectScreen';
 import { ReviewScreen } from './ReviewScreen';
 import { ScanScreen } from './ScanScreen';
 import { SimulateScreen } from './SimulateScreen';
+import { storedCount } from './stored-count';
 import type { Overview, Screen } from './types';
 
 const NAV: Array<{ id: Screen; label: string; hint: string }> = [
@@ -16,10 +17,6 @@ const NAV: Array<{ id: Screen; label: string; hint: string }> = [
   { id: 'review', label: 'nav.review', hint: 'nav.reviewHint' },
   { id: 'simulate', label: 'nav.simulate', hint: 'nav.simulateHint' },
 ];
-
-function total(counts: Record<string, number>): number {
-  return Object.values(counts).reduce((sum, value) => sum + value, 0);
-}
 
 function errorText(cause: unknown, t: (path: string) => string): string {
   if (cause instanceof ApiError && cause.code) {
@@ -72,6 +69,21 @@ export function App() {
     };
   }, [t]);
 
+  useEffect(() => {
+    if (screen !== 'home' || loading) {
+      return;
+    }
+    let active = true;
+    void refresh().catch((cause: unknown) => {
+      if (active) {
+        setError(errorText(cause, t));
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [screen, loading, refresh, t]);
+
   async function run(action: () => Promise<void>) {
     setError(null);
     try {
@@ -82,7 +94,7 @@ export function App() {
     }
   }
 
-  const stored = overview ? total(overview.counts) : 0;
+  const stored = overview ? storedCount(overview.counts) : 0;
 
   return (
     <div className="min-h-screen bg-stone-100 text-stone-900">
@@ -265,6 +277,20 @@ function Home({
         <Stat label={t('home.people')} value={String(overview.people.length)} />
         <Stat label={t('home.timezone')} value={overview.timezone} />
       </div>
+      {(overview.years ?? []).length > 0 ? (
+        <article className="rounded-3xl bg-white p-5 shadow-sm">
+          <h3 className="text-xs font-medium tracking-wide text-stone-500 uppercase">
+            {t('home.years')}
+          </h3>
+          <ul className="mt-3 grid gap-2 sm:grid-cols-3">
+            {(overview.years ?? []).map((entry) => (
+              <li key={entry.year} className="text-lg font-semibold tabular-nums">
+                {entry.year}: {entry.count}
+              </li>
+            ))}
+          </ul>
+        </article>
+      ) : null}
       <article className="rounded-3xl bg-white p-5 shadow-sm">
         <h3 className="font-semibold">{t('home.aboutTitle')}</h3>
         <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-stone-700">

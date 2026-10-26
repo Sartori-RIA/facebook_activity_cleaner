@@ -2,19 +2,17 @@
 
 Local command-line tool for deleting **your own** historical Facebook activity while keeping family memories.
 
-It is not affiliated with Meta. Facebook deletion can be irreversible. Download your information from Facebook before you delete anything.
-
-**Aviso:** a exclusão no Facebook pode ser irreversível. Exporte seus dados antes. Regras de proteção de família ficam ligadas o tempo todo. Datas desconhecidas não são apagadas.
+It is not affiliated with Meta. Facebook deletion can be irreversible. Download your information from Facebook before you delete anything. Family protection stays on. Unknown dates are not deleted.
 
 ## What this build does
 
 This version is the safety foundation:
 
 - It stores activity on this computer in SQLite.
-- It can scan a **local HTML fixture** so the pipeline can be tested without Facebook.
+- It reads a **local HTML file**: the test fixture, or the official Facebook download for posts, comments, and reactions.
 - It filters by date, protects people and family keywords, and previews the reason each item is kept.
 - Deletion is a dry-run unless you pass `--execute` and the exact confirmation phrase.
-- Live Facebook login, scanning, and clicking are **turned off**. The Activity Log selectors have not been validated against the current interface, and this program will not invent them.
+- Live Facebook login, scanning, and clicking are **turned off**. The delete controls have not been written down from the logged-in screen, and this program will not invent them.
 
 ## Install
 
@@ -40,6 +38,7 @@ The default directory is `~/.fb-cleaner`, outside the repository:
 - `config.yaml` — optional settings
 - `activity.sqlite` — discovered activities and protection rules
 - `browser-profile/` — reserved for a future Playwright profile
+- `uploads/` — a private copy of an HTML file chosen in the page
 
 Directories are created with mode `0700` and the database with mode `0600` where the operating system allows it. Nothing is uploaded.
 
@@ -70,7 +69,7 @@ You do not need to remember the commands. From the project folder:
 npm run ui
 ```
 
-That builds the page and opens it at `http://127.0.0.1:4173`. While changing the page, use `npm run ui:dev` and open `http://127.0.0.1:5173`. The page talks only to this computer. Protection stays on. The buttons simulate a deletion and tell you that nothing was deleted. Live Facebook deletion is not on this screen.
+That builds the page and opens it at `http://127.0.0.1:4173`. While changing the page, use `npm run ui:dev` and open `http://127.0.0.1:5173`. The page talks only to this computer. It is in Portuguese, Spanish, and English. On Buscar, choose the downloaded HTML and the period. The sample file is not your account. Protection stays on. The buttons simulate a deletion and tell you that nothing was deleted. Live Facebook deletion is not on this screen.
 
 ## Commands
 
@@ -113,9 +112,20 @@ The image helper always returns `unclassified`. It does not upload photos and do
 
 ## Live Facebook
 
-`fb-cleaner login`, `scan` without `--fixture`, and `delete --execute` stop before opening Facebook or changing a row to deleted. When the real Activity Log is inspected, record accessible roles and names in `src/facebook/selectors/registry.ts`. Do not paste guessed CSS selectors.
+`scan` without a local HTML file still does not read the Activity Log.
 
-See [docs/limitations.md](docs/limitations.md) and [plans/README.md](plans/README.md).
+Posts can be moved to the trash from the command line. The local page still only simulates. Sign in once, in the window this program opens, then close that window:
+
+```bash
+npx tsx src/cli/index.ts login
+npx tsx src/cli/index.ts delete --year 2015 --type posts
+```
+
+Repeat the delete command with `--execute` and the exact confirmation phrase it prints. Omit `--limit` to include every eligible row. One window stays open for the whole run. As soon as the saved text is visible, it opens **Mais opções para** on that row, clicks **Mover para a Lixeira**, then clicks the blue confirm button. The program stops there. You empty the trash yourself. It does not click **Mover para Itens Arquivados**, **Cancelar**, **Fechar**, or the button that empties the whole trash. A row with no Facebook address, or a page that shows different text, stays in review. A page that already shows Registro de atividades and Nada para mostrar, without the saved text, is recorded as already gone and is not clicked. Comments, reactions, photos, and reels stay out. Live Activity Log scanning stays off.
+
+The post controls recorded from the logged-in screen are the overflow button, the trash menu item, and the blue confirm button. Do not paste guessed CSS selectors. Comment, reaction, and checkpoint controls are still empty.
+
+See [docs/limitations.md](docs/limitations.md), [docs/live-deletion-plan.md](docs/live-deletion-plan.md), and [plans/README.md](plans/README.md).
 
 ## License
 

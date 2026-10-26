@@ -1,0 +1,27 @@
+---
+description: English for code, comments, and docs
+alwaysApply: true
+---
+
+# English in the project
+
+Code, comments, documentation, and commit messages are English.
+
+## Write in English
+
+- Identifiers, comments, `docs/`, `plans/`, `README.md`, and `AGENTS.md`.
+- New error text that developers read in logs or thrown `Error` messages.
+
+```ts
+// Bad
+// abre o link exportado e apaga
+
+// Good
+// Open the stored export URL and delete that item only.
+```
+
+## Leave user-facing copy in the catalogs
+
+- Portuguese, Spanish, and English sentences for the local page live in `web/src/i18n/pt.ts`, `es.ts`, and `en.ts`.
+- Do not translate those catalogs into English, and do not add a Portuguese comment next to them.
+- Words from a Facebook export, such as `fev` or `compartilhou`, stay in the parser as data. Explain them with an English comment when the code is not obvious.

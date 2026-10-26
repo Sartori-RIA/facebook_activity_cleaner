@@ -8,6 +8,7 @@ import {
   FacebookUiNotValidatedError,
   ProtectionOverrideError,
 } from '../domain/errors.js';
+import { isFixedReviewYear } from '../review/fixed-years.js';
 import { UiError } from './ui-error.js';
 import {
   addAlbum,
@@ -121,6 +122,14 @@ async function readJson(req: IncomingMessage, maxBytes = 1_000_000): Promise<unk
   } catch {
     throw new UiError('invalid_json', 'O pedido não está em JSON.');
   }
+}
+
+function reviewYear(raw: string | null): number {
+  const year = Number(raw);
+  if (!raw || !/^\d{4}$/.test(raw) || !isFixedReviewYear(year)) {
+    throw new UiError('year_required', 'Choose a four-digit year for review.');
+  }
+  return year;
 }
 
 function errorCode(error: AppError): string {
@@ -259,7 +268,8 @@ export function startUiServer(
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/activities') {
-          sendJson(res, 200, { activities: listActivityCards(ctx) });
+          const year = reviewYear(url.searchParams.get('year'));
+          sendJson(res, 200, { activities: listActivityCards(ctx, year) });
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/export') {

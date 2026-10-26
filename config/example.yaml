@@ -6,6 +6,7 @@ delays:
   max_ms: 5000
 
 limits:
+  # Parsed for older files. A delete run includes every eligible row unless --limit is set.
   max_deletes_per_run: 25
   max_consecutive_failures: 3
   scroll_stagnation_limit: 3

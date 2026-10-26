@@ -2,7 +2,8 @@ export type DeletionObservation =
   | { outcome: 'deleted'; detail: string }
   | { outcome: 'not_deleted'; detail: string }
   | { outcome: 'uncertain'; detail: string }
-  | { outcome: 'blocked_by_facebook'; detail: string };
+  | { outcome: 'blocked_by_facebook'; detail: string }
+  | { outcome: 'not_this_item'; detail: string };
 
 export interface VerifiedDeletion {
   status: 'deleted' | 'failed' | 'requires_review';
@@ -19,6 +20,9 @@ export function interpretObservation(observation: DeletionObservation): Verified
   }
   if (observation.outcome === 'not_deleted') {
     return { status: 'failed', verified: false, stopRun: false };
+  }
+  if (observation.outcome === 'not_this_item') {
+    return { status: 'requires_review', verified: false, stopRun: false };
   }
   return { status: 'requires_review', verified: false, stopRun: true };
 }

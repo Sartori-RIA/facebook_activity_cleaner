@@ -7,6 +7,7 @@ export interface Overview {
   timezone: string;
   databasePath: string;
   counts: Record<string, number>;
+  years: Array<{ year: number; count: number }>;
   people: Array<{
     id: string;
     name: string;

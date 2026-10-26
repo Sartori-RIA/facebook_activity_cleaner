@@ -6,6 +6,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Command } from 'commander';
 import { BrowserManager } from '../browser/browser-manager.js';
+import { ExportedLinkDeleter } from '../browser/exported-link-browser.js';
+import { formatDeletionProgress, formatDuration } from './deletion-progress.js';
 import { SessionManager } from '../browser/session-manager.js';
 import { AppError } from '../domain/errors.js';
 import { toCsv, toJson, exportRow } from '../export/serialize.js';
@@ -16,11 +18,7 @@ import { applyManualReview, loadDecision, rememberDecision } from '../protection
 import { compileDateFilter } from '../scanner/filters.js';
 import { loadFixtureSource } from '../scanner/fixture-source.js';
 import { runScan } from '../scanner/scanner.js';
-import {
-  DeletionEngine,
-  UnavailableFacebookDeleter,
-  recoverInFlightDeletions,
-} from '../deletion/deletion-engine.js';
+import { DeletionEngine, recoverInFlightDeletions } from '../deletion/deletion-engine.js';
 import { renderPreviewText, renderReviewHtml, type ReviewedActivity } from '../review/report.js';
 import { assertLiveAutomationAvailable } from '../safety/live-automation.js';
 import { startUiServer } from '../server/http.js';
@@ -211,12 +209,12 @@ export function createProgram(io: CliIo = defaultIo): Command {
         '--type <type>',
         'posts, comments, reactions, media, other, or all. Required so the scope is explicit.',
       )
-      .option(
-        '--execute',
-        'Arm deletion. Still requires the confirmation phrase. Live Facebook deletion is unavailable in this build.',
-      )
+      .option('--execute', 'Arm deletion. Still requires the confirmation phrase.')
       .option('--confirm <phrase>', 'Exact phrase printed by the dry-run.')
-      .option('--limit <count>', 'Maximum deletion attempts for this run.'),
+      .option(
+        '--limit <count>',
+        'Maximum deletion attempts for this run. Omit it to include every eligible row.',
+      ),
   ).action(async function (this: Command) {
     await usingContext(this, io, async (ctx) => {
       const options = globals(this);
@@ -225,16 +223,13 @@ export function createProgram(io: CliIo = defaultIo): Command {
         requireConstraint: true,
       });
       const type = parseActivityType(String(options.type));
-      const limit = parseLimit(
-        typeof options.limit === 'string' ? options.limit : undefined,
-        ctx.config.limits.max_deletes_per_run,
-      );
+      const limit = typeof options.limit === 'string' ? parseLimit(options.limit, 1) : null;
       print(
         io,
         'Facebook deletion may be irreversible. Export your Facebook data before deleting anything.',
       );
       print(io, 'Protection rules are on and cannot be disabled.');
-      print(io, `Filters: ${filter.description}. Type: ${type}. Limit: ${limit}.`);
+      print(io, `Filters: ${filter.description}. Type: ${type}. Limit: ${limit ?? 'none'}.`);
       const engine = new DeletionEngine({
         activities: ctx.activities,
         jobs: ctx.jobs,
@@ -249,7 +244,7 @@ export function createProgram(io: CliIo = defaultIo): Command {
         limit,
         delays: { minMs: ctx.config.delays.min_ms, maxMs: ctx.config.delays.max_ms },
         maxConsecutiveFailures: ctx.config.limits.max_consecutive_failures,
-        deleter: new UnavailableFacebookDeleter(),
+        deleter: new ExportedLinkDeleter(ctx.paths.browserProfilePath),
         loadFacts: (activity: ReviewedActivity['activity']) => {
           const review = ctx.protection.latestReview(activity.id);
           return factsFromActivity(activity, filter, {
@@ -264,10 +259,14 @@ export function createProgram(io: CliIo = defaultIo): Command {
         print(io, `Eligible posts and comments: ${planned.eligibleIds.length}.`);
         phrase = (await io.prompt(`Type ${planned.phrase} to authorize this exact set: `)).trim();
       }
+      const started = Date.now();
       const summary = await engine.run({
         ...baseRequest,
         execute: Boolean(options.execute),
         phrase,
+        onProgress: options.execute
+          ? (event) => print(io, formatDeletionProgress(event))
+          : undefined,
       });
       if (summary.dryRun) {
         print(io, 'Dry-run. Nothing was deleted.');
@@ -284,7 +283,7 @@ export function createProgram(io: CliIo = defaultIo): Command {
       }
       print(
         io,
-        `Deleted ${summary.deletedIds.length}. Failed ${summary.failedIds.length}. Needs review ${summary.reviewIds.length}.`,
+        `Deleted ${summary.deletedIds.length}. Failed ${summary.failedIds.length}. Needs review ${summary.reviewIds.length}. Elapsed ${formatDuration(Date.now() - started)}.`,
       );
     });
   });
@@ -413,7 +412,7 @@ export function createProgram(io: CliIo = defaultIo): Command {
   program
     .command('login')
     .description(
-      'Prepare a private browser profile. Live Facebook login is disabled until the UI is validated.',
+      'Open a browser window so you can sign in yourself. The program does not type or store the password.',
     )
     .action(async function (this: Command) {
       await usingContext(this, io, async (ctx) => {

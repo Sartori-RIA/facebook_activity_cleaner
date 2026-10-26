@@ -248,6 +248,19 @@ export class ActivityRepository {
     return rows.map(mapActivity);
   }
 
+  listByYear(year: number): ActivityRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM activities
+         WHERE status NOT IN ('deleted', 'deleting')
+           AND occurred_text GLOB '[0-9][0-9][0-9][0-9]*'
+           AND substr(occurred_text, 1, 4) = ?
+         ORDER BY occurred_text, id`,
+      )
+      .all(String(year)) as ActivityRow[];
+    return rows.map(mapActivity);
+  }
+
   listByStatuses(statuses: readonly ActivityStatus[]): ActivityRecord[] {
     if (statuses.length === 0) {
       return [];
@@ -276,6 +289,30 @@ export class ActivityRepository {
       counts[asEnum(row.status, ACTIVITY_STATUSES, 'status')] = row.count;
     }
     return counts;
+  }
+
+  countByYear(): Array<{ year: number; count: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT substr(occurred_text, 1, 4) AS year, COUNT(*) AS count
+         FROM activities
+         WHERE status != 'deleted'
+           AND occurred_text GLOB '[0-9][0-9][0-9][0-9]*'
+         GROUP BY year
+         ORDER BY year`,
+      )
+      .all() as Array<{ year: string; count: number }>;
+    const first = Number(rows[0]?.year);
+    const last = Number(rows.at(-1)?.year);
+    if (!Number.isInteger(first) || !Number.isInteger(last)) {
+      return [];
+    }
+    const counts = new Map(rows.map((row) => [Number(row.year), row.count]));
+    const years: Array<{ year: number; count: number }> = [];
+    for (let year = first; year <= last; year += 1) {
+      years.push({ year, count: counts.get(year) ?? 0 });
+    }
+    return years;
   }
 
   transition(

@@ -53,10 +53,20 @@ export function rememberDecision(
     return activity;
   }
   const next = statusForDecision(decision);
-  const terminal = activity.status === 'deleted' || activity.status === 'deleting';
   const review = stores.protection.latestReview(activity.id);
   const explicit = stores.protection.isExplicitlyProtected(activity.id);
-  const mayUpdate = !terminal && (!review || decision.outcome === 'never_delete' || !explicit);
+  const manual = review?.decision ?? null;
+  const released =
+    activity.status !== 'requires_review' ||
+    manual === 'approve_deletion' ||
+    manual === 'skip' ||
+    manual === 'protect';
+  const inFlight =
+    activity.status === 'deleted' ||
+    activity.status === 'deleting' ||
+    activity.status === 'pending';
+  const mayUpdate =
+    released && !inFlight && (!review || decision.outcome === 'never_delete' || !explicit);
   if (mayUpdate && activity.status !== next && canTransition(activity.status, next)) {
     const metadata = {
       ...activity.metadata,

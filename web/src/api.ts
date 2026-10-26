@@ -35,7 +35,8 @@ export const api = {
   overview: () => request<Overview>('/api/overview'),
   saveAccount: (body: { name: string; profileUrl?: string }) =>
     request<{ account: { name: string; profileUrl: string | null } | null }>('/api/account', body),
-  activities: () => request<{ activities: ActivityCard[] }>('/api/activities'),
+  activities: (year: number) =>
+    request<{ activities: ActivityCard[] }>(`/api/activities?year=${year}`),
   addPerson: (body: { name: string; relationship?: string; profileUrl?: string }) =>
     request<{ id: string; name: string }>('/api/protection/person', body),
   addKeyword: (keyword: string) => request<{ ok: boolean }>('/api/protection/keyword', { keyword }),

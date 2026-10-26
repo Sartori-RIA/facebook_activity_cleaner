@@ -24,7 +24,11 @@ The verbatim request is [docs/initial-prompt.md](../docs/initial-prompt.md). Thi
 - Review and simulation show the saved text and a link only for an https address on facebook.com or fb.com. Session parameters are dropped. The page does not embed remote images.
 - The scan screen sends the contents of a file the user picks. The browser path is ignored. The copy is stored under the app home and is read only if it contains fixture items. A local file is read in pages of 200 and continues through pages that are already stored, until the file ends or the page cap. Live scrolling keeps the smaller stop.
 - The profile address at the top is a local label. A chosen file may be the official Facebook HTML export. Posts and comments in that export are read locally. The whole folder is not uploaded at once. Live Activity Log automation stays off.
-- Live deletion after the HTML import is described in [docs/live-deletion-plan.md](../docs/live-deletion-plan.md). That document does not enable it.
+- Live deletion after the HTML import is described in [docs/live-deletion-plan.md](../docs/live-deletion-plan.md). A confirmed post delete opens the stored address and moves that post to the trash. If that address already opens on Registro de atividades and Nada para mostrar, and the saved text is absent, the post is already gone and is marked deleted with no click. The account owner empties the trash. The local page does not do this. Automated tests do not open the browser.
+- Opening the review list does not move a `deleted` or `requires_review` row back to eligible. Deleted rows are left out of that list. A row in review stays visible there and is not selected by the next deletion.
+- The home stored count and the by-year counts omit rows whose status is `deleted`. The review screen asks for one calendar year at a time. Its year menu is 2004 through the current year and does not read years from stored posts.
+- A delete run includes every eligible row unless `--limit` is passed. One browser window stays open for the run and waits until the page shows the saved text or the empty activity screen before it clicks.
+- Code, comments, documentation, and commit messages are English. User-facing copy stays in `web/src/i18n`.
 - License: MIT.
 
 ## Phase 1 — Foundation (this checkout)

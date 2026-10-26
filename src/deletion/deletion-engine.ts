@@ -14,11 +14,12 @@ import { interpretObservation, type DeletionObservation } from './deletion-verif
 const EXECUTABLE_TYPES = new Set(['post', 'comment']);
 
 export interface ActivityDeleter {
-  kind: 'simulated' | 'unavailable';
+  kind: 'simulated' | 'unavailable' | 'live';
   deleteActivity(
     activity: ActivityRecord,
     context: { signal: AbortSignal },
   ): Promise<DeletionObservation>;
+  close?(): Promise<void>;
 }
 
 export class UnavailableFacebookDeleter implements ActivityDeleter {
@@ -59,13 +60,23 @@ export interface DeletionRequest {
   filters: Record<string, unknown>;
   type: ActivityTypeFilter;
   policy: ProtectionPolicy;
-  limit: number;
+  limit: number | null;
   delays: { minMs: number; maxMs: number };
   maxConsecutiveFailures: number;
   loadFacts: (activity: ActivityRecord) => ActivityFacts;
   deleter: ActivityDeleter;
   signal?: AbortSignal;
   beforeEachDelete?: (activity: ActivityRecord) => void;
+  onProgress?: (event: DeletionProgress) => void;
+}
+
+export interface DeletionProgress {
+  index: number;
+  total: number;
+  phase: 'opening' | 'done';
+  outcome?: 'deleted' | 'failed' | 'requires_review' | 'skipped';
+  elapsedMs: number;
+  remainingMs: number | null;
 }
 
 function typeIncluded(
@@ -154,7 +165,7 @@ export class DeletionEngine {
       .map((activity) => activity.id);
     const eligibleIds = evaluated
       .filter((activity) => EXECUTABLE_TYPES.has(activity.activityType))
-      .slice(0, request.limit)
+      .slice(0, request.limit ?? undefined)
       .map((activity) => activity.id);
     const phrase = confirmationPhrase(eligibleIds);
     const authorization = authorizeDeletion({
@@ -198,7 +209,10 @@ export class DeletionEngine {
       };
     }
 
-    if (request.mode === 'live' || request.deleter.kind === 'unavailable') {
+    if (
+      request.deleter.kind === 'unavailable' ||
+      (request.mode === 'live' && process.env.VITEST === 'true')
+    ) {
       assertLiveAutomationAvailable('delete activities');
     }
 
@@ -246,144 +260,183 @@ export class DeletionEngine {
       throw error;
     }
 
-    const deletedIds: string[] = [];
-    const failedIds: string[] = [];
-    const skippedIds: string[] = [];
-    const reviewIds: string[] = [];
-    let consecutiveFailures = 0;
-    let stoppedBecause: string | null = null;
-    let jobStatus: 'completed' | 'interrupted' | 'failed' = 'completed';
+    try {
+      const deletedIds: string[] = [];
+      const failedIds: string[] = [];
+      const skippedIds: string[] = [];
+      const reviewIds: string[] = [];
+      let consecutiveFailures = 0;
+      let stoppedBecause: string | null = null;
+      let jobStatus: 'completed' | 'interrupted' | 'failed' = 'completed';
+      const startedMs = now().getTime();
+      let finished = 0;
+      const total = eligibleIds.length;
+      const report = (
+        phase: DeletionProgress['phase'],
+        outcome?: DeletionProgress['outcome'],
+      ): void => {
+        if (phase === 'done') {
+          finished += 1;
+        }
+        const elapsedMs = Math.max(0, now().getTime() - startedMs);
+        const remainingMs =
+          finished > 0 ? Math.round((elapsedMs / finished) * (total - finished)) : null;
+        request.onProgress?.({
+          index: phase === 'opening' ? finished + 1 : finished,
+          total,
+          phase,
+          ...(outcome ? { outcome } : {}),
+          elapsedMs,
+          remainingMs,
+        });
+      };
 
-    for (const id of eligibleIds) {
-      if (signal.aborted) {
-        stoppedBecause = 'interrupted';
-        jobStatus = 'interrupted';
-        break;
-      }
-      const queued = this.deps.activities.requireById(id);
-      if (queued.status !== 'pending') {
-        continue;
-      }
-      await pause(request.delays.minMs, request.delays.maxMs, random, sleep);
-      if (signal.aborted) {
-        stoppedBecause = 'interrupted';
-        jobStatus = 'interrupted';
-        break;
-      }
-      request.beforeEachDelete?.(queued);
-      const decision = evaluateProtection(
-        request.loadFacts(this.deps.activities.requireById(id)),
-        request.policy,
-      );
-      if (decision.outcome !== 'eligible') {
-        const nextStatus: ActivityStatus =
-          decision.outcome === 'requires_review' ? 'requires_review' : 'skipped';
-        this.deps.activities.transition(id, nextStatus, now(), {
-          lastError: 'Protection recheck removed this activity from the deletion set.',
-        });
-        this.deps.jobs.addAttempt({
-          id: randomUUID(),
-          jobId: job.id,
-          activityId: id,
-          outcome: nextStatus === 'requires_review' ? 'requires_review' : 'skipped',
-          verified: false,
-          errorMessage: 'Removed by protection recheck.',
-          now: now(),
-        });
-        (nextStatus === 'requires_review' ? reviewIds : skippedIds).push(id);
-        continue;
-      }
+      for (const id of eligibleIds) {
+        if (signal.aborted) {
+          stoppedBecause = 'interrupted';
+          jobStatus = 'interrupted';
+          break;
+        }
+        const queued = this.deps.activities.requireById(id);
+        if (queued.status !== 'pending') {
+          report('done', 'skipped');
+          continue;
+        }
+        await pause(request.delays.minMs, request.delays.maxMs, random, sleep);
+        if (signal.aborted) {
+          stoppedBecause = 'interrupted';
+          jobStatus = 'interrupted';
+          break;
+        }
+        request.beforeEachDelete?.(queued);
+        const decision = evaluateProtection(
+          request.loadFacts(this.deps.activities.requireById(id)),
+          request.policy,
+        );
+        if (decision.outcome !== 'eligible') {
+          const nextStatus: ActivityStatus =
+            decision.outcome === 'requires_review' ? 'requires_review' : 'skipped';
+          this.deps.activities.transition(id, nextStatus, now(), {
+            lastError: 'Protection recheck removed this activity from the deletion set.',
+          });
+          this.deps.jobs.addAttempt({
+            id: randomUUID(),
+            jobId: job.id,
+            activityId: id,
+            outcome: nextStatus === 'requires_review' ? 'requires_review' : 'skipped',
+            verified: false,
+            errorMessage: 'Removed by protection recheck.',
+            now: now(),
+          });
+          (nextStatus === 'requires_review' ? reviewIds : skippedIds).push(id);
+          report('done', nextStatus === 'requires_review' ? 'requires_review' : 'skipped');
+          continue;
+        }
 
-      this.deps.activities.transition(id, 'deleting', now());
-      let observation: DeletionObservation;
-      try {
-        observation = await request.deleter.deleteActivity(this.deps.activities.requireById(id), {
-          signal,
-        });
-      } catch {
-        observation = {
-          outcome: 'uncertain',
-          detail: 'The deletion action threw before a verified result.',
-        };
-      }
-      const verified = interpretObservation(observation);
-      if (verified.status === 'deleted') {
-        this.deps.activities.transition(id, 'deleted', now(), {
-          deletedAt: now().toISOString(),
-          lastError: null,
-          incrementAttempt: true,
-        });
-        deletedIds.push(id);
-        consecutiveFailures = 0;
-      } else if (verified.status === 'failed') {
-        this.deps.activities.transition(id, 'failed', now(), {
-          lastError: observation.detail,
-          incrementAttempt: true,
-        });
-        failedIds.push(id);
-        consecutiveFailures += 1;
-      } else {
-        this.deps.activities.transition(id, 'requires_review', now(), {
-          lastError: observation.detail,
-          incrementAttempt: true,
-        });
-        reviewIds.push(id);
-        stoppedBecause =
-          observation.outcome === 'blocked_by_facebook'
-            ? 'facebook_restriction'
-            : 'uncertain_outcome';
-        jobStatus = 'interrupted';
-      }
-      this.deps.jobs.addAttempt({
-        id: randomUUID(),
-        jobId: job.id,
-        activityId: id,
-        outcome:
+        report('opening');
+        this.deps.activities.transition(id, 'deleting', now());
+        let observation: DeletionObservation;
+        try {
+          observation = await request.deleter.deleteActivity(this.deps.activities.requireById(id), {
+            signal,
+          });
+        } catch {
+          observation = {
+            outcome: 'uncertain',
+            detail: 'The deletion action threw before a verified result.',
+          };
+        }
+        const verified = interpretObservation(observation);
+        if (verified.status === 'deleted') {
+          this.deps.activities.transition(id, 'deleted', now(), {
+            deletedAt: now().toISOString(),
+            lastError: null,
+            incrementAttempt: true,
+          });
+          deletedIds.push(id);
+          consecutiveFailures = 0;
+        } else if (verified.status === 'failed') {
+          this.deps.activities.transition(id, 'failed', now(), {
+            lastError: observation.detail,
+            incrementAttempt: true,
+          });
+          failedIds.push(id);
+          consecutiveFailures += 1;
+        } else {
+          this.deps.activities.transition(id, 'requires_review', now(), {
+            lastError: observation.detail,
+            incrementAttempt: true,
+          });
+          reviewIds.push(id);
+          if (verified.stopRun) {
+            stoppedBecause =
+              observation.outcome === 'blocked_by_facebook'
+                ? 'facebook_restriction'
+                : 'uncertain_outcome';
+            jobStatus = 'interrupted';
+          }
+        }
+        report(
+          'done',
           verified.status === 'deleted'
             ? 'deleted'
             : verified.status === 'failed'
               ? 'failed'
               : 'requires_review',
-        verified: verified.verified,
-        errorMessage: verified.status === 'deleted' ? null : observation.detail,
+        );
+        this.deps.jobs.addAttempt({
+          id: randomUUID(),
+          jobId: job.id,
+          activityId: id,
+          outcome:
+            verified.status === 'deleted'
+              ? 'deleted'
+              : verified.status === 'failed'
+                ? 'failed'
+                : 'requires_review',
+          verified: verified.verified,
+          errorMessage: verified.status === 'deleted' ? null : observation.detail,
+          now: now(),
+        });
+        if (verified.stopRun || consecutiveFailures >= request.maxConsecutiveFailures) {
+          if (!verified.stopRun) {
+            stoppedBecause = 'repeated_failures';
+            jobStatus = 'interrupted';
+          }
+          break;
+        }
+      }
+
+      for (const id of eligibleIds) {
+        const current = this.deps.activities.getById(id);
+        if (current?.status === 'pending') {
+          this.deps.activities.transition(id, 'eligible', now());
+        }
+      }
+      this.deps.jobs.finish(job.id, {
+        status: jobStatus,
+        deletedCount: deletedIds.length,
+        failedCount: failedIds.length,
+        skippedCount: skippedIds.length,
+        reviewCount: reviewIds.length,
+        errorMessage: stoppedBecause,
         now: now(),
       });
-      if (verified.stopRun || consecutiveFailures >= request.maxConsecutiveFailures) {
-        if (!verified.stopRun) {
-          stoppedBecause = 'repeated_failures';
-          jobStatus = 'interrupted';
-        }
-        break;
-      }
+      return {
+        dryRun: false,
+        phrase,
+        eligibleIds,
+        withheldIds,
+        deletedIds,
+        failedIds,
+        skippedIds,
+        reviewIds,
+        jobId: job.id,
+        description,
+        stoppedBecause,
+      };
+    } finally {
+      await request.deleter.close?.();
     }
-
-    for (const id of eligibleIds) {
-      const current = this.deps.activities.getById(id);
-      if (current?.status === 'pending') {
-        this.deps.activities.transition(id, 'eligible', now());
-      }
-    }
-    this.deps.jobs.finish(job.id, {
-      status: jobStatus,
-      deletedCount: deletedIds.length,
-      failedCount: failedIds.length,
-      skippedCount: skippedIds.length,
-      reviewCount: reviewIds.length,
-      errorMessage: stoppedBecause,
-      now: now(),
-    });
-    return {
-      dryRun: false,
-      phrase,
-      eligibleIds,
-      withheldIds,
-      deletedIds,
-      failedIds,
-      skippedIds,
-      reviewIds,
-      jobId: job.id,
-      description,
-      stoppedBecause,
-    };
   }
 }

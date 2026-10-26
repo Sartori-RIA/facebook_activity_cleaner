@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
+import { fixedReviewYears } from '../../src/review/fixed-years';
 import { ActivityDetails } from './ActivityDetails';
 import { api } from './api';
 import { useI18n } from './i18n';
+import { matchesReviewPeriod } from './review-period';
 import type { ActivityCard, PreviewGroup } from './types';
 
 const GROUPS: Array<{ id: PreviewGroup | 'all'; label: string }> = [
@@ -12,6 +14,8 @@ const GROUPS: Array<{ id: PreviewGroup | 'all'; label: string }> = [
   { id: 'safe_candidates', label: 'group.safe' },
   { id: 'skipped', label: 'group.skipped' },
 ];
+
+const MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 
 const GROUP_TONE: Record<PreviewGroup, string> = {
   protected: 'bg-emerald-100 text-emerald-950',
@@ -44,21 +48,51 @@ function reasonText(
 
 export function ReviewScreen({ onRun }: { onRun: (action: () => Promise<void>) => Promise<void> }) {
   const { t } = useI18n();
+  const years = fixedReviewYears(new Date().getFullYear());
   const [activities, setActivities] = useState<ActivityCard[]>([]);
   const [group, setGroup] = useState<PreviewGroup | 'all'>('all');
+  const [year, setYear] = useState(years[0] ?? new Date().getFullYear());
+  const [month, setMonth] = useState<number | 'all'>('all');
+  const [revision, setRevision] = useState(0);
   const [loaded, setLoaded] = useState(false);
 
-  async function load() {
-    const payload = await api.activities();
-    setActivities(payload.activities);
-    setLoaded(true);
-  }
-
   useEffect(() => {
-    void load().catch(() => setLoaded(true));
-  }, []);
+    let active = true;
+    setLoaded(false);
+    setActivities([]);
+    api
+      .activities(year)
+      .then((payload) => {
+        if (active) {
+          setActivities(payload.activities);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setActivities([]);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoaded(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [year, revision]);
 
-  const visible = activities.filter((item) => group === 'all' || item.group === group);
+  const visible = activities.filter(
+    (item) =>
+      (group === 'all' || item.group === group) && matchesReviewPeriod(item.date, year, month),
+  );
+
+  function reloadAfter(decision: 'protect' | 'approve_deletion' | 'skip', id: string) {
+    return onRun(async () => {
+      await api.review({ id, decision });
+      setRevision((current) => current + 1);
+    });
+  }
 
   return (
     <section className="space-y-4">
@@ -67,6 +101,43 @@ export function ReviewScreen({ onRun }: { onRun: (action: () => Promise<void>) =
         <p className="mt-1 text-sm text-stone-600">{t('review.intro')}</p>
         <p className="mt-2 text-sm text-stone-600">{t('review.linkHint')}</p>
       </header>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm font-medium text-stone-700">
+          {t('review.year')}
+          <select
+            className="ml-2 rounded-full border border-stone-300 bg-white px-3 py-1.5"
+            value={String(year)}
+            onChange={(event) => {
+              setYear(Number(event.target.value));
+              setMonth('all');
+            }}
+          >
+            {years.map((entry) => (
+              <option key={entry} value={entry}>
+                {entry}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-stone-700">
+          {t('review.month')}
+          <select
+            className="ml-2 rounded-full border border-stone-300 bg-white px-3 py-1.5"
+            value={month === 'all' ? 'all' : String(month)}
+            onChange={(event) => {
+              const next = event.target.value;
+              setMonth(next === 'all' ? 'all' : Number(next));
+            }}
+          >
+            <option value="all">{t('review.allMonths')}</option>
+            {MONTHS.map((entry) => (
+              <option key={entry} value={entry}>
+                {t(`month.${entry}`)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <div className="flex flex-wrap gap-2">
         {GROUPS.map((item) => (
           <button
@@ -104,6 +175,9 @@ export function ReviewScreen({ onRun }: { onRun: (action: () => Promise<void>) =
                 </span>
               </div>
               <ActivityDetails item={item} t={t} />
+              {item.status === 'requires_review' ? (
+                <p className="mt-3 text-sm text-amber-950">{t('review.held')}</p>
+              ) : null}
               {item.reasons.length > 0 ? (
                 <ul className="mt-3 space-y-1 text-sm text-stone-600">
                   {item.reasons.map((reason, index) => (
@@ -117,18 +191,14 @@ export function ReviewScreen({ onRun }: { onRun: (action: () => Promise<void>) =
                 <button
                   type="button"
                   className="rounded-full bg-emerald-800 px-3 py-1.5 text-sm font-semibold text-white"
-                  onClick={() =>
-                    void onRun(() => api.review({ id: item.id, decision: 'protect' }).then(load))
-                  }
+                  onClick={() => void reloadAfter('protect', item.id)}
                 >
                   {t('review.protect')}
                 </button>
                 <button
                   type="button"
                   className="rounded-full border border-stone-300 px-3 py-1.5 text-sm"
-                  onClick={() =>
-                    void onRun(() => api.review({ id: item.id, decision: 'skip' }).then(load))
-                  }
+                  onClick={() => void reloadAfter('skip', item.id)}
                 >
                   {t('review.skip')}
                 </button>
@@ -136,11 +206,7 @@ export function ReviewScreen({ onRun }: { onRun: (action: () => Promise<void>) =
                   type="button"
                   disabled={item.group === 'protected'}
                   className="rounded-full border border-stone-300 px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:text-stone-400"
-                  onClick={() =>
-                    void onRun(() =>
-                      api.review({ id: item.id, decision: 'approve_deletion' }).then(load),
-                    )
-                  }
+                  onClick={() => void reloadAfter('approve_deletion', item.id)}
                 >
                   {t('review.approve')}
                 </button>

@@ -2,6 +2,10 @@
 
 Read [docs/initial-prompt.md](docs/initial-prompt.md) before changing behavior. It is the original specification and stays verbatim. Record implementation decisions in [plans/README.md](plans/README.md).
 
+## Language
+
+Write code, comments, documentation, and commit messages in English. User-facing sentences belong in `web/src/i18n/` (`pt.ts`, `es.ts`, `en.ts`). Leave those catalogs in their own language. Portuguese or Spanish words that appear in a Facebook export are data, not a reason to write Portuguese comments or docs.
+
 ## Product rule
 
 The job is to delete unwanted history **and** keep family memories. When a rule is ambiguous, preserve the activity.

@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openContext } from '../../src/cli/context.js';
+import { listActivityCards, overview } from '../../src/server/operations.js';
+import { storedCount } from '../../web/src/stored-count.js';
 import { startUiServer, type UiServer } from '../../src/server/http.js';
+import { storeOwnedPost } from '../helpers.js';
 
 const homes: string[] = [];
 const servers: UiServer[] = [];
@@ -49,6 +52,35 @@ async function call(
 }
 
 describe('local interface', () => {
+  it('leaves deleted rows out of the review list and keeps a deletion review', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'fb-cleaner-ui-'));
+    homes.push(home);
+    const ctx = openContext({ home, logLevel: 'silent' });
+    const gone = storeOwnedPost(ctx.activities, { textPreview: 'gone post' });
+    const held = storeOwnedPost(ctx.activities, { textPreview: 'held post' });
+    const now = new Date();
+    ctx.activities.transition(gone.id, 'pending', now);
+    ctx.activities.transition(gone.id, 'deleting', now);
+    ctx.activities.transition(gone.id, 'deleted', now);
+    ctx.activities.transition(held.id, 'requires_review', now, {
+      lastError: 'The opened page does not show the saved text.',
+    });
+    const cards = listActivityCards(ctx);
+    expect(cards.find((item) => item.text === 'gone post')).toBeUndefined();
+    expect(cards.find((item) => item.text === 'held post')).toMatchObject({
+      status: 'requires_review',
+      group: 'needs_review',
+    });
+    expect(listActivityCards(ctx).find((item) => item.text === 'held post')?.status).toBe(
+      'requires_review',
+    );
+    expect(listActivityCards(ctx, 2015).map((item) => item.text)).toEqual(['held post']);
+    expect(listActivityCards(ctx, 2014)).toEqual([]);
+    expect(overview(ctx).years).toEqual([{ year: 2015, count: 1 }]);
+    expect(storedCount(overview(ctx).counts)).toBe(1);
+    ctx.close();
+  });
+
   it('scans a chosen html file and refuses a web address', async () => {
     const url = await start();
     const html =
@@ -62,7 +94,10 @@ describe('local interface', () => {
     expect(scan.status).toBe(200);
     const body = (await scan.json()) as { inserted: number };
     expect(body.inserted).toBe(1);
-    const activities = await call(url, '/api/activities');
+    const missingYear = await call(url, '/api/activities');
+    expect(missingYear.status).toBe(400);
+    expect(((await missingYear.json()) as { code: string }).code).toBe('year_required');
+    const activities = await call(url, '/api/activities?year=2015');
     const cards = (await activities.json()) as { activities: Array<{ text: string | null }> };
     expect(cards.activities.some((item) => item.text === 'Uploaded note')).toBe(true);
     expect(cards.activities.some((item) => item.text === 'Quarterly planning notes')).toBe(false);
@@ -217,14 +252,21 @@ describe('local interface', () => {
     );
     expect(execute.status).toBe(404);
 
-    const activities = await call(url, '/api/activities');
-    const cards = (await activities.json()) as {
+    const activities2014 = await call(url, '/api/activities?year=2014');
+    const cards2014 = (await activities2014.json()) as {
       activities: Array<{ text: string | null; group: string; status: string }>;
     };
-    expect(cards.activities.find((item) => item.text === 'Natal com a família')?.group).toBe(
+    const activities2016 = await call(url, '/api/activities?year=2016');
+    const cards2016 = (await activities2016.json()) as {
+      activities: Array<{ text: string | null; group: string; status: string }>;
+    };
+    expect(cards2014.activities.find((item) => item.text === 'Natal com a família')?.group).toBe(
       'protected',
     );
-    expect(cards.activities.find((item) => item.text === 'See you there')?.group).toBe('protected');
-    expect(cards.activities.every((item) => item.status !== 'deleted')).toBe(true);
+    expect(cards2016.activities.find((item) => item.text === 'See you there')?.group).toBe(
+      'protected',
+    );
+    expect(cards2014.activities.every((item) => item.status !== 'deleted')).toBe(true);
+    expect(cards2016.activities.some((item) => item.text === 'Natal com a família')).toBe(false);
   });
 });

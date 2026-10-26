@@ -9,11 +9,12 @@ import {
   UnavailableFacebookDeleter,
   recoverInFlightDeletions,
   type ActivityDeleter,
+  type DeletionProgress,
 } from '../../src/deletion/deletion-engine.js';
 import { interpretObservation } from '../../src/deletion/deletion-verifier.js';
 import { assertTransition } from '../../src/deletion/state-machine.js';
 import { factsFromActivity } from '../../src/protection/facts.js';
-import { applyManualReview } from '../../src/protection/refresh.js';
+import { applyManualReview, loadDecision, rememberDecision } from '../../src/protection/refresh.js';
 import { compileDateFilter } from '../../src/scanner/filters.js';
 import { FACEBOOK_SELECTORS_VALIDATED } from '../../src/facebook/selectors/registry.js';
 import { activityHandlers } from '../../src/facebook/handlers/index.js';
@@ -58,6 +59,67 @@ describe('state transitions', () => {
 });
 
 describe('deletion safety', () => {
+  it('includes every eligible row when no limit is set', async () => {
+    const stores = createStores();
+    const first = storeOwnedPost(stores.activities, { textPreview: 'First planning note' });
+    const second = storeOwnedPost(stores.activities, { textPreview: 'Second planning note' });
+    const summary = await engineFor(stores).run({
+      mode: 'simulated',
+      execute: false,
+      phrase: null,
+      filter,
+      filters: { before: '2017-01-01' },
+      type: 'post',
+      policy: basePolicy(),
+      limit: null,
+      delays: { minMs: 0, maxMs: 0 },
+      maxConsecutiveFailures: 3,
+      loadFacts: (item) => factsFor(stores, item),
+      deleter: {
+        kind: 'simulated',
+        async deleteActivity() {
+          throw new Error('deleter should not be called');
+        },
+      },
+    });
+    expect(summary.eligibleIds).toHaveLength(2);
+    expect(summary.eligibleIds).toEqual(expect.arrayContaining([first.id, second.id]));
+    stores.close();
+  });
+
+  it('reports opening and finishing each deletion', async () => {
+    const stores = createStores();
+    const first = storeOwnedPost(stores.activities, { textPreview: 'First planning note' });
+    const second = storeOwnedPost(stores.activities, { textPreview: 'Second planning note' });
+    const events: DeletionProgress[] = [];
+    await engineFor(stores).run({
+      mode: 'simulated',
+      execute: true,
+      phrase: confirmationPhrase([first.id, second.id]),
+      filter,
+      filters: { before: '2017-01-01' },
+      type: 'post',
+      policy: basePolicy(),
+      limit: null,
+      delays: { minMs: 0, maxMs: 0 },
+      maxConsecutiveFailures: 3,
+      loadFacts: (item) => factsFor(stores, item),
+      onProgress: (event) => events.push(event),
+      deleter: {
+        kind: 'simulated',
+        async deleteActivity() {
+          return { outcome: 'deleted', detail: 'Moved to the trash.' };
+        },
+      },
+    });
+    expect(
+      events.map((event) => `${event.phase}:${event.index}/${event.total}:${event.outcome ?? ''}`),
+    ).toEqual(['opening:1/2:', 'done:1/2:deleted', 'opening:2/2:', 'done:2/2:deleted']);
+    expect(events[1]?.remainingMs).toBeGreaterThanOrEqual(0);
+    expect(events[3]?.remainingMs).toBe(0);
+    stores.close();
+  });
+
   it('dry-run does not call the deleter or change status', async () => {
     const stores = createStores();
     const activity = storeOwnedPost(stores.activities);
@@ -402,6 +464,83 @@ describe('deletion safety', () => {
     expect(
       interpretObservation({ outcome: 'blocked_by_facebook', detail: 'checkpoint' }).stopRun,
     ).toBe(true);
+    expect(interpretObservation({ outcome: 'not_this_item', detail: 'wrong page' })).toEqual({
+      status: 'requires_review',
+      verified: false,
+      stopRun: false,
+    });
+  });
+
+  it('continues to the next exported link when the opened page is not that item', async () => {
+    const stores = createStores();
+    const first = storeOwnedPost(stores.activities, {
+      textPreview: 'First exported note',
+      occurredText: '2015-01-01',
+      sourceUrl: null,
+    });
+    const second = storeOwnedPost(stores.activities, {
+      textPreview: 'Second exported note',
+      occurredText: '2015-02-01',
+      sourceUrl: 'https://www.facebook.com/fixture/posts/2',
+    });
+    const opened: string[] = [];
+    const deleter: ActivityDeleter = {
+      kind: 'simulated',
+      async deleteActivity(item) {
+        if (!item.sourceUrl) {
+          return {
+            outcome: 'not_this_item',
+            detail: 'This exported item has no Facebook address to open.',
+          };
+        }
+        opened.push(item.sourceUrl);
+        return { outcome: 'deleted', detail: 'The opened page showed the removal notice.' };
+      },
+    };
+    const summary = await engineFor(stores).run({
+      mode: 'simulated',
+      execute: true,
+      phrase: confirmationPhrase([first.id, second.id]),
+      filter,
+      filters: { before: '2017-01-01' },
+      type: 'post',
+      policy: basePolicy(),
+      limit: 25,
+      delays: { minMs: 0, maxMs: 0 },
+      maxConsecutiveFailures: 3,
+      loadFacts: (item) => factsFor(stores, item),
+      deleter,
+    });
+    expect(summary.stoppedBecause).toBeNull();
+    expect(summary.reviewIds).toEqual([first.id]);
+    expect(summary.deletedIds).toEqual([second.id]);
+    expect(opened).toEqual(['https://www.facebook.com/fixture/posts/2']);
+    expect(stores.activities.requireById(first.id).status).toBe('requires_review');
+    expect(stores.activities.requireById(second.id).status).toBe('deleted');
+    stores.close();
+  });
+
+  it('keeps a deletion review in place when the review list is refreshed', () => {
+    const stores = createStores();
+    const activity = storeOwnedPost(stores.activities);
+    stores.activities.transition(activity.id, 'requires_review', new Date(), {
+      lastError: 'The opened page does not show the saved text.',
+    });
+    const current = stores.activities.requireById(activity.id);
+    const storesView = { activities: stores.activities, protection: stores.protection };
+    const decision = loadDecision(storesView, current, filter, basePolicy());
+    expect(decision.outcome).toBe('eligible');
+    const saved = rememberDecision(storesView, current, decision, { updateStatus: true });
+    expect(saved.status).toBe('requires_review');
+    const approved = applyManualReview(storesView, {
+      activityId: activity.id,
+      decision: 'approve_deletion',
+      note: null,
+      filter,
+      policy: basePolicy(),
+    });
+    expect(approved.activity.status).toBe('eligible');
+    stores.close();
   });
 
   it('blocks approval of a protected activity', () => {

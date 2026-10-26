@@ -1,4 +1,4 @@
-export const migration001 = {
+ export const migration001 = {
   id: '001_initial',
   sql: `
 CREATE TABLE scan_sessions (
